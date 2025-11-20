@@ -1,9 +1,8 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
 from functools import wraps
 import hashlib
 import datetime
-import json
 import os
 
 from flask_sqlalchemy import SQLAlchemy
@@ -20,7 +19,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("❌ DATABASE_URL is not set. Add it in Render environment variables.")
 
-# Required fix for old postgres:// format
+# Fix deprecated postgres:// format (Render sometimes uses it)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -28,6 +27,13 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+
+# ==========================================================
+# AUTO-CREATE TABLES (REQUIRED FOR RENDER)
+# ==========================================================
+with app.app_context():
+    db.create_all()
+
 
 # ==========================================================
 # DATABASE MODELS
@@ -122,6 +128,7 @@ def login():
 
     session["user_id"] = user.id
     session["username"] = user.username
+
     return jsonify({"message": "Login successful", "username": user.username}), 200
 
 
@@ -161,7 +168,10 @@ def expenses():
         return jsonify({"message": "Expense added successfully"}), 201
 
     # GET expenses
-    expenses = Expense.query.filter_by(user_id=session["user_id"]).order_by(Expense.date.desc()).all()
+    expenses = Expense.query.filter_by(
+        user_id=session["user_id"]
+    ).order_by(Expense.date.desc()).all()
+
     result = [
         {
             "id": e.id,
@@ -202,10 +212,7 @@ def analytics():
         Expense.category, db.func.sum(Expense.amount)
     ).filter_by(user_id=user_id).group_by(Expense.category).all()
 
-    category_data = [
-        {"category": cat, "amount": total}
-        for cat, total in category_rows
-    ]
+    category_data = [{"category": c, "amount": t} for c, t in category_rows]
 
     # Monthly summary
     current_year = datetime.datetime.now().year
@@ -229,7 +236,9 @@ def analytics():
     ]
 
     # Total expenses
-    total_expenses = db.session.query(db.func.sum(Expense.amount)).filter_by(user_id=user_id).scalar() or 0
+    total_expenses = db.session.query(
+        db.func.sum(Expense.amount)
+    ).filter_by(user_id=user_id).scalar() or 0
 
     return jsonify({
         "category_data": category_data,
@@ -238,18 +247,12 @@ def analytics():
     })
 
 
+# ------------------ SESSION CHECK ------------------
 @app.route("/check_session")
 def check_session():
     if "user_id" in session:
         return jsonify({"logged_in": True, "username": session["username"]})
     return jsonify({"logged_in": False})
 
-
-# ==========================================================
-# RUN (creates tables automatically)
-# ==========================================================
 if __name__ == "__main__":
-    from app import app, db
-    with app.app_context():
-        db.create_all()
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
